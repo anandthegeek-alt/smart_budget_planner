@@ -98,7 +98,9 @@
           'ph-tag', 'ph-house', 'ph-shopping-cart', 'ph-lightning', 'ph-film-strip', 'ph-monitor-play', 'ph-car', 'ph-dots-three-circle', 
           'ph-money', 'ph-laptop', 'ph-trend-up', 'ph-fork-knife', 'ph-airplane-tilt', 'ph-heartbeat', 'ph-book-open', 'ph-game-controller', 
           'ph-shopping-bag', 'ph-chart-bar', 'ph-coffee', 'ph-first-aid', 'ph-graduation-cap', 'ph-paw-print', 'ph-baby', 'ph-barbell',
-          'ph-bus', 'ph-train', 'ph-bicycle', 'ph-wrench', 'ph-wifi-high', 'ph-drop', 'ph-fire', 'ph-music-notes', 'ph-camera'
+          'ph-bus', 'ph-train', 'ph-bicycle', 'ph-wrench', 'ph-wifi-high', 'ph-drop', 'ph-fire', 'ph-music-notes', 'ph-camera',
+          'ph-bank', 'ph-credit-card', 'ph-currency-circle-dollar', 'ph-gift', 'ph-pizza', 'ph-hamburger', 'ph-martini', 'ph-sneaker', 
+          'ph-t-shirt', 'ph-briefcase', 'ph-suitcase', 'ph-tv', 'ph-desktop', 'ph-device-mobile', 'ph-speaker-hifi', 'ph-users', 'ph-user'
         ];
 
         const normalizeSubcats = (subs) => (subs || []).map(s => typeof s === 'string' ? { name: s, icon: 'ph-tag' } : s);
@@ -286,10 +288,15 @@
           const [newAccountType, setNewAccountType] = useState('Liquid');
           const [newAccountBalance, setNewAccountBalance] = useState('');
 
+          // New states for Icon management
           const [newCatName, setNewCatName] = useState('');
           const [newCatColor, setNewCatColor] = useState('#8b5cf6');
           const [newCatIcon, setNewCatIcon] = useState('ph-tag');
           const [newCatType, setNewCatType] = useState('expense');
+          const [newSubcatIcons, setNewSubcatIcons] = useState({});
+          
+          // Icon Picker Modal State
+          const [iconPickerModal, setIconPickerModal] = useState({ isOpen: false, value: '', onSelect: null });
 
           const [showAllTransactions, setShowAllTransactions] = useState(false);
           const [isEditingBudgets, setIsEditingBudgets] = useState(false);
@@ -535,36 +542,47 @@
 
           const spendingTrendData = useMemo(() => {
             const expenses = dateFilteredTransactions.filter(t => t.type === 'expense');
+            const incomes = dateFilteredTransactions.filter(t => t.type === 'income');
             let data = [];
             
             if (filterMonth !== 'all' && filterYear !== 'all') {
                 // Group by Day
                 const daysInMonth = new Date(filterYear, filterMonth, 0).getDate();
-                data = Array.from({length: daysInMonth}, (_, i) => ({ label: (i+1).toString(), value: 0 }));
+                data = Array.from({length: daysInMonth}, (_, i) => ({ label: (i+1).toString(), expense: 0, income: 0 }));
                 expenses.forEach(t => {
                     const day = parseInt(t.date.split('-')[2], 10);
-                    if (day && data[day - 1]) data[day - 1].value += parseFloat(t.amount);
+                    if (day && data[day - 1]) data[day - 1].expense += parseFloat(t.amount);
+                });
+                incomes.forEach(t => {
+                    const day = parseInt(t.date.split('-')[2], 10);
+                    if (day && data[day - 1]) data[day - 1].income += parseFloat(t.amount);
                 });
             } else if (filterYear !== 'all') {
                 // Group by Month
                 const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-                data = months.map(m => ({ label: m, value: 0 }));
+                data = months.map(m => ({ label: m, expense: 0, income: 0 }));
                 expenses.forEach(t => {
                     const month = parseInt(t.date.split('-')[1], 10);
-                    if (month && data[month - 1]) data[month - 1].value += parseFloat(t.amount);
+                    if (month && data[month - 1]) data[month - 1].expense += parseFloat(t.amount);
+                });
+                incomes.forEach(t => {
+                    const month = parseInt(t.date.split('-')[1], 10);
+                    if (month && data[month - 1]) data[month - 1].income += parseFloat(t.amount);
                 });
             } else {
                 // Group by Year
                 const yearsMap = {};
-                expenses.forEach(t => {
+                dateFilteredTransactions.forEach(t => {
                     const year = t.date.split('-')[0];
                     if (year) {
-                        yearsMap[year] = (yearsMap[year] || 0) + parseFloat(t.amount);
+                        if (!yearsMap[year]) yearsMap[year] = { expense: 0, income: 0 };
+                        if (t.type === 'expense') yearsMap[year].expense += parseFloat(t.amount);
+                        if (t.type === 'income') yearsMap[year].income += parseFloat(t.amount);
                     }
                 });
                 const years = Object.keys(yearsMap).sort();
                 if (years.length === 0) years.push(new Date().getFullYear().toString());
-                data = years.map(y => ({ label: y, value: yearsMap[y] || 0 }));
+                data = years.map(y => ({ label: y, expense: yearsMap[y]?.expense || 0, income: yearsMap[y]?.income || 0 }));
             }
             return data;
           }, [dateFilteredTransactions, filterMonth, filterYear]);
@@ -617,7 +635,6 @@
             let finalAmount = formData.amount.toString().trim();
             if (finalAmount.startsWith('=')) {
                 try {
-                    // Strips out any dangerous text, allowing only math characters
                     const mathExpr = finalAmount.substring(1).replace(/[^0-9+\-*/.()]/g, '');
                     if (!mathExpr) throw new Error("Empty Expression");
                     finalAmount = new Function('return ' + mathExpr)();
@@ -710,7 +727,7 @@
           const handleAddSubcategory = (e, catName, type) => {
             e.preventDefault();
             const inputName = e.target.elements.subcatName.value.trim();
-            const inputIcon = e.target.elements.subcatIcon.value;
+            const inputIcon = newSubcatIcons[catName] || 'ph-tag';
             if (!inputName) return;
             
             const updateFn = type === 'expense' ? setExpenseCategories : setIncomeCategories;
@@ -722,6 +739,7 @@
               return c;
             }));
             e.target.reset(); 
+            setNewSubcatIcons(prev => ({...prev, [catName]: 'ph-tag'}));
           };
 
           const handleRemoveSubcategory = (catName, type, subName) => {
@@ -797,6 +815,7 @@
               setIncomeCategories(prev => [...prev, newCat]);
             }
             setNewCatName('');
+            setNewCatIcon('ph-tag');
           };
 
           const handleDeleteCategory = (name, type) => {
@@ -1001,48 +1020,58 @@
           };
 
           const renderTrendChart = () => {
-            if (spendingTrendData.length === 0 || spendingTrendData.every(d => d.value === 0)) {
+            if (spendingTrendData.length === 0 || spendingTrendData.every(d => d.expense === 0 && d.income === 0)) {
                 return (
                     <div className="flex flex-col items-center justify-center h-48 text-gray-500">
                         <i className="ph ph-chart-line text-[48px] mb-2 opacity-20"></i>
-                        <p className="text-center text-sm">No spending data to plot</p>
+                        <p className="text-center text-sm">No data to plot</p>
                     </div>
                 );
             }
 
-            const maxVal = Math.max(...spendingTrendData.map(d => d.value)) || 1;
-            // Add 10% headroom to the top of the chart so the line doesn't clip
+            const maxVal = Math.max(...spendingTrendData.flatMap(d => [d.expense, d.income])) || 1;
             const adjustedMax = maxVal * 1.1; 
             
             const width = 800;
             const height = 240;
-            const paddingLeft = 55; // Increased to fit Y-axis labels
+            const paddingLeft = 55; 
             const paddingRight = 30;
             const paddingY = 30;
             const chartW = width - paddingLeft - paddingRight;
             const chartH = height - paddingY * 2;
 
-            // Formatter for Y-axis (Compact format: 1.5L, 50K, etc.)
             const formatY = (val) => new Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(val);
 
-            const points = spendingTrendData.map((d, i) => {
+            const expensePoints = spendingTrendData.map((d, i) => {
                 const x = paddingLeft + (i * (chartW / (spendingTrendData.length - 1 || 1)));
-                const y = height - paddingY - ((d.value / adjustedMax) * chartH);
+                const y = height - paddingY - ((d.expense / adjustedMax) * chartH);
                 return `${x},${y}`;
             }).join(' ');
 
-            const areaPath = `${paddingLeft},${height - paddingY} ${points} ${width - paddingRight},${height - paddingY}`;
+            const incomePoints = spendingTrendData.map((d, i) => {
+                const x = paddingLeft + (i * (chartW / (spendingTrendData.length - 1 || 1)));
+                const y = height - paddingY - ((d.income / adjustedMax) * chartH);
+                return `${x},${y}`;
+            }).join(' ');
+
+            const expenseAreaPath = `${paddingLeft},${height - paddingY} ${expensePoints} ${width - paddingRight},${height - paddingY}`;
+            const incomeAreaPath = `${paddingLeft},${height - paddingY} ${incomePoints} ${width - paddingRight},${height - paddingY}`;
 
             return (
                 <div className="relative w-full overflow-x-auto custom-scrollbar">
                     <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full min-w-[600px] max-h-64 overflow-visible">
                         <defs>
-                            <linearGradient id="lineGradient" x1="0" x2="0" y1="0" y2="1">
+                            <linearGradient id="incomeGradient" x1="0" x2="0" y1="0" y2="1">
                                 <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.4" />
                                 <stop offset="100%" stopColor="#3b82f6" stopOpacity="0" />
                             </linearGradient>
+                            <linearGradient id="expenseGradient" x1="0" x2="0" y1="0" y2="1">
+                                <stop offset="0%" stopColor="#ef4444" stopOpacity="0.4" />
+                                <stop offset="100%" stopColor="#ef4444" stopOpacity="0" />
+                            </linearGradient>
                         </defs>
                         
+                        {/* Y-Axis Grid Lines */}
                         {[0, 0.25, 0.5, 0.75, 1].map(ratio => {
                             const y = height - paddingY - (chartH * ratio);
                             const val = adjustedMax * ratio;
@@ -1056,45 +1085,72 @@
                             )
                         })}
 
-                        <polygon points={areaPath} fill="url(#lineGradient)" />
-                        <polyline points={points} fill="none" stroke="#3b82f6" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+                        {/* Income Area & Line (Blue) */}
+                        <polygon points={incomeAreaPath} fill="url(#incomeGradient)" />
+                        <polyline points={incomePoints} fill="none" stroke="#3b82f6" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+
+                        {/* Expense Area & Line (Red) */}
+                        <polygon points={expenseAreaPath} fill="url(#expenseGradient)" />
+                        <polyline points={expensePoints} fill="none" stroke="#ef4444" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
                         
+                        {/* Data Points & X-Axis Labels */}
                         {spendingTrendData.map((d, i) => {
                             const x = paddingLeft + (i * (chartW / (spendingTrendData.length - 1 || 1)));
-                            const y = height - paddingY - ((d.value / adjustedMax) * chartH);
+                            const incY = height - paddingY - ((d.income / adjustedMax) * chartH);
+                            const expY = height - paddingY - ((d.expense / adjustedMax) * chartH);
                             return (
                                 <g key={i}>
-                                    <circle 
-                                        cx={x} cy={y} r="5" 
-                                        className="fill-white dark:fill-gray-900 stroke-blue-500 stroke-[2px] cursor-pointer transition-all hover:stroke-[4px]" 
-                                        onMouseEnter={() => setHoveredPoint({ x, y, value: d.value, label: d.label })} 
-                                        onMouseLeave={() => setHoveredPoint(null)} 
-                                    />
+                                    <circle cx={x} cy={incY} r="4" className="fill-white dark:fill-gray-900 stroke-blue-500 stroke-[2px]" />
+                                    <circle cx={x} cy={expY} r="4" className="fill-white dark:fill-gray-900 stroke-red-500 stroke-[2px]" />
                                     {(spendingTrendData.length <= 12 || i % Math.ceil(spendingTrendData.length / 10) === 0 || i === spendingTrendData.length - 1) && (
                                         <text x={x} y={height - 5} fontSize="11" textAnchor="middle" className="fill-gray-500 dark:fill-gray-400 font-medium">{d.label}</text>
                                     )}
                                 </g>
                             )
                         })}
+
+                        {/* Hover Overlay Columns */}
+                        {spendingTrendData.map((d, i) => {
+                            const x = paddingLeft + (i * (chartW / (spendingTrendData.length - 1 || 1)));
+                            const colWidth = chartW / (spendingTrendData.length - 1 || 1);
+                            return (
+                                <rect
+                                    key={`hover-${i}`}
+                                    x={x - colWidth / 2}
+                                    y={0}
+                                    width={colWidth}
+                                    height={height}
+                                    fill="transparent"
+                                    className="cursor-pointer"
+                                    onMouseEnter={() => setHoveredPoint({ x, expense: d.expense, income: d.income, label: d.label })}
+                                    onMouseLeave={() => setHoveredPoint(null)}
+                                />
+                            )
+                        })}
                         
+                        {/* Unified Tooltip */}
                         {hoveredPoint && (
                             <g className="pointer-events-none transition-all duration-200 ease-in-out">
+                                <line x1={hoveredPoint.x} y1={paddingY} x2={hoveredPoint.x} y2={height - paddingY} stroke="currentColor" className="text-gray-400 dark:text-gray-600" strokeWidth="1" strokeDasharray="4 4" />
+                                
                                 <rect 
-                                    x={Math.max(10, Math.min(width - 100, hoveredPoint.x - 45))} 
-                                    y={hoveredPoint.y - 35} 
-                                    width="90" 
-                                    height="24" 
+                                    x={Math.max(10, Math.min(width - 160, hoveredPoint.x - 80))} 
+                                    y={10} 
+                                    width="160" 
+                                    height="50" 
                                     rx="6" 
                                     className="fill-gray-800 dark:fill-white shadow-xl" 
                                 />
-                                <text 
-                                    x={Math.max(55, Math.min(width - 55, hoveredPoint.x))} 
-                                    y={hoveredPoint.y - 18} 
-                                    fontSize="12" 
-                                    textAnchor="middle" 
-                                    className="fill-white dark:fill-gray-900 font-bold"
-                                >
-                                    {formatCurrency(hoveredPoint.value)}
+                                <circle cx={Math.max(10, Math.min(width - 160, hoveredPoint.x - 80)) + 15} cy={25} r="4" fill="#3b82f6" />
+                                <text x={Math.max(10, Math.min(width - 160, hoveredPoint.x - 80)) + 25} y={29} fontSize="11" className="fill-gray-300 dark:fill-gray-600">Income:</text>
+                                <text x={Math.max(10, Math.min(width - 160, hoveredPoint.x - 80)) + 145} y={29} fontSize="12" textAnchor="end" className="fill-blue-400 dark:fill-blue-600 font-bold">
+                                    {formatCurrency(hoveredPoint.income)}
+                                </text>
+
+                                <circle cx={Math.max(10, Math.min(width - 160, hoveredPoint.x - 80)) + 15} cy={42} r="4" fill="#ef4444" />
+                                <text x={Math.max(10, Math.min(width - 160, hoveredPoint.x - 80)) + 25} y={46} fontSize="11" className="fill-gray-300 dark:fill-gray-600">Expense:</text>
+                                <text x={Math.max(10, Math.min(width - 160, hoveredPoint.x - 80)) + 145} y={46} fontSize="12" textAnchor="end" className="fill-red-400 dark:fill-red-600 font-bold">
+                                    {formatCurrency(hoveredPoint.expense)}
                                 </text>
                             </g>
                         )}
@@ -1406,8 +1462,12 @@
                       <div className="flex items-center justify-between mb-6 gap-4">
                         <h2 className="text-lg font-semibold flex items-center gap-2 text-gray-900 dark:text-white">
                           <i className="ph ph-chart-line-up text-gray-400 text-[20px]"></i> 
-                          Spending Trend
+                          Income vs Expense
                         </h2>
+                        <div className="flex items-center gap-3 text-xs font-medium text-gray-500 dark:text-gray-400">
+                            <div className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-blue-500"></div> Income</div>
+                            <div className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-red-500"></div> Expense</div>
+                        </div>
                       </div>
                       <div className="flex-1 w-full">
                         {renderTrendChart()}
@@ -1696,11 +1756,11 @@
                                 <div key={cat.name} className="flex flex-col bg-gray-50 dark:bg-gray-800 p-3 rounded-lg border border-gray-200 dark:border-gray-700 space-y-3">
                                   {editingCategory?.originalName === cat.name && editingCategory?.type === newCatType ? (
                                      <form onSubmit={handleUpdateCategory} className="flex flex-col gap-3">
-                                        <div className="flex gap-2">
-                                          <input type="color" value={editingCategory.color} onChange={e => setEditingCategory({...editingCategory, color: e.target.value})} className="w-8 h-8 rounded cursor-pointer bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-0.5 shrink-0" />
-                                          <select value={editingCategory.icon} onChange={e => setEditingCategory({...editingCategory, icon: e.target.value})} className="bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded px-2 text-sm text-gray-900 dark:text-white focus:outline-none w-14 shrink-0">
-                                            {ICONS_LIST.map(icon => <option key={icon} value={icon}>{icon.replace('ph-', '')}</option>)}
-                                          </select>
+                                        <div className="flex items-center gap-2">
+                                          <input type="color" value={editingCategory.color} onChange={e => setEditingCategory({...editingCategory, color: e.target.value})} className="w-8 h-8 rounded cursor-pointer bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-0.5 shrink-0" title="Select Color" />
+                                          <button type="button" onClick={() => setIconPickerModal({ isOpen: true, value: editingCategory.icon, onSelect: (icon) => setEditingCategory({...editingCategory, icon}) })} className="w-8 h-8 rounded bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 flex items-center justify-center text-gray-900 dark:text-white shrink-0 hover:border-blue-500 transition-colors" title="Select Icon">
+                                            <i className={`ph ${editingCategory.icon || 'ph-tag'} text-[18px]`}></i>
+                                          </button>
                                           <input type="text" value={editingCategory.name} onChange={e => setEditingCategory({...editingCategory, name: e.target.value})} className="flex-1 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded py-1 px-2 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-blue-500" required />
                                         </div>
                                         <div className="flex gap-2">
@@ -1711,10 +1771,10 @@
                                   ) : (
                                   <div className="flex items-center justify-between">
                                     <div className="flex items-center gap-3">
-                                      <div className="w-6 h-6 rounded-full flex items-center justify-center border border-black/10 dark:border-gray-600/50" style={{ backgroundColor: cat.color }}><i className={`ph ${cat.icon} text-white text-xs`}></i></div>
-                                      <span className="font-medium text-gray-900 dark:text-gray-200">{cat.name}</span>
+                                      <div className="w-6 h-6 rounded-full flex items-center justify-center border border-black/10 dark:border-gray-600/50 shrink-0" style={{ backgroundColor: cat.color }}><i className={`ph ${cat.icon || 'ph-tag'} text-white text-xs`}></i></div>
+                                      <span className="font-medium text-gray-900 dark:text-gray-200 truncate">{cat.name}</span>
                                     </div>
-                                    <div className="flex items-center gap-1">
+                                    <div className="flex items-center gap-1 shrink-0">
                                       <button type="button" onClick={() => setEditingCategory({ originalName: cat.name, name: cat.name, color: cat.color, icon: cat.icon || 'ph-tag', type: newCatType })} className="text-gray-400 hover:text-blue-500 p-1"><i className="ph ph-pencil-simple text-[16px]"></i></button>
                                       <button type="button" onClick={() => handleDeleteCategory(cat.name, newCatType)} className="text-gray-400 hover:text-red-500 p-1"><i className="ph ph-trash text-[16px]"></i></button>
                                     </div>
@@ -1728,17 +1788,17 @@
                                       {normalizeSubcats(cat.subcategories).map(sub => (
                                         editingSubcategory?.originalName === sub.name && editingSubcategory?.categoryName === cat.name && editingSubcategory?.type === newCatType ? (
                                           <form key={sub.name} onSubmit={handleUpdateSubcategory} className="flex items-center gap-2 bg-white dark:bg-gray-900/50 p-1.5 rounded border border-gray-200 dark:border-gray-700">
-                                            <select value={editingSubcategory.icon} onChange={e => setEditingSubcategory({...editingSubcategory, icon: e.target.value})} className="bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded px-1 py-1 text-xs text-gray-900 dark:text-white focus:outline-none w-12 shrink-0">
-                                              {ICONS_LIST.map(icon => <option key={icon} value={icon}>{icon.replace('ph-', '')}</option>)}
-                                            </select>
+                                            <button type="button" onClick={() => setIconPickerModal({ isOpen: true, value: editingSubcategory.icon, onSelect: (icon) => setEditingSubcategory({...editingSubcategory, icon}) })} className="w-7 h-7 rounded bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-600 flex items-center justify-center text-gray-900 dark:text-white shrink-0 hover:border-blue-500 transition-colors" title="Select Icon">
+                                                <i className={`ph ${editingSubcategory.icon || 'ph-tag'} text-[14px]`}></i>
+                                            </button>
                                             <input type="text" value={editingSubcategory.name} onChange={e => setEditingSubcategory({...editingSubcategory, name: e.target.value})} className="flex-1 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded py-1 px-2 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-blue-500" required />
                                             <button type="submit" className="text-blue-600 dark:text-blue-400 hover:text-blue-500 dark:hover:text-blue-300 p-1"><i className="ph ph-check text-[14px]"></i></button>
                                             <button type="button" onClick={() => setEditingSubcategory(null)} className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 p-1"><i className="ph ph-x text-[14px]"></i></button>
                                           </form>
                                         ) : (
                                           <div key={sub.name} className="flex items-center justify-between bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700/50 rounded p-1.5 text-xs text-gray-700 dark:text-gray-300">
-                                            <div className="flex items-center gap-2"><i className={`ph ${sub.icon || 'ph-tag'} text-gray-500 dark:text-gray-400`}></i><span>{sub.name}</span></div>
-                                            <div className="flex items-center gap-1">
+                                            <div className="flex items-center gap-2"><i className={`ph ${sub.icon || 'ph-tag'} text-gray-500 dark:text-gray-400 text-[14px]`}></i><span className="truncate">{sub.name}</span></div>
+                                            <div className="flex items-center gap-1 shrink-0">
                                               <button type="button" onClick={() => setEditingSubcategory({ categoryName: cat.name, originalName: sub.name, name: sub.name, icon: sub.icon || 'ph-tag', type: newCatType })} className="text-gray-400 hover:text-blue-500 p-0.5"><i className="ph ph-pencil-simple text-[12px]"></i></button>
                                               <button type="button" onClick={() => handleRemoveSubcategory(cat.name, newCatType, sub.name)} className="text-gray-400 hover:text-red-500 p-0.5"><i className="ph ph-trash text-[12px]"></i></button>
                                             </div>
@@ -1747,7 +1807,9 @@
                                       ))}
                                     </div>
                                     <form onSubmit={(e) => handleAddSubcategory(e, cat.name, newCatType)} className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-200 dark:border-gray-800">
-                                      <select name="subcatIcon" className="bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded py-1.5 px-1 text-xs text-gray-900 dark:text-white focus:outline-none w-12 shrink-0">{ICONS_LIST.map(icon => <option key={icon} value={icon}>{icon.replace('ph-', '')}</option>)}</select>
+                                      <button type="button" onClick={() => setIconPickerModal({ isOpen: true, value: newSubcatIcons[cat.name] || 'ph-tag', onSelect: (icon) => setNewSubcatIcons(prev => ({...prev, [cat.name]: icon})) })} className="w-8 h-8 rounded bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 flex items-center justify-center text-gray-900 dark:text-white shrink-0 hover:border-blue-500 transition-colors" title="Select Icon">
+                                        <i className={`ph ${newSubcatIcons[cat.name] || 'ph-tag'} text-[16px]`}></i>
+                                      </button>
                                       <input name="subcatName" type="text" placeholder="New subcategory..." className="flex-1 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded py-1.5 px-2 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-blue-500" />
                                       <button type="submit" className="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-white px-2 py-1.5 rounded text-xs transition-colors font-medium">Add</button>
                                     </form>
@@ -1759,8 +1821,10 @@
                             <form onSubmit={handleAddCategory} className="space-y-3 pt-4 border-t border-gray-200 dark:border-gray-800">
                               <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Add Category</h3>
                               <div className="flex gap-2">
-                                <input type="color" value={newCatColor} onChange={(e) => setNewCatColor(e.target.value)} className="w-10 h-10 rounded cursor-pointer bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 p-1 shrink-0" />
-                                <select value={newCatIcon} onChange={(e) => setNewCatIcon(e.target.value)} className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 text-sm text-gray-900 dark:text-white focus:outline-none w-16 shrink-0">{ICONS_LIST.map(icon => <option key={icon} value={icon}>{icon.replace('ph-', '')}</option>)}</select>
+                                <input type="color" value={newCatColor} onChange={(e) => setNewCatColor(e.target.value)} className="w-10 h-10 rounded cursor-pointer bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 p-1 shrink-0" title="Select Color" />
+                                <button type="button" onClick={() => setIconPickerModal({ isOpen: true, value: newCatIcon, onSelect: setNewCatIcon })} className="w-10 h-10 rounded bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 flex items-center justify-center text-gray-900 dark:text-white shrink-0 hover:border-blue-500 transition-colors" title="Select Icon">
+                                    <i className={`ph ${newCatIcon} text-[20px]`}></i>
+                                </button>
                                 <input type="text" value={newCatName} onChange={(e) => setNewCatName(e.target.value)} placeholder="Category Name" className="flex-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg py-2 px-3 text-gray-900 dark:text-white focus:outline-none focus:border-blue-500" />
                                 <button type="submit" disabled={!newCatName} className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-3 py-2 rounded-lg font-medium">Add</button>
                               </div>
@@ -1808,6 +1872,36 @@
                           </div>
                         )}
                       </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Icon Picker Overlay Modal */}
+                {iconPickerModal.isOpen && (
+                  <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/40 dark:bg-black/70 backdrop-blur-sm">
+                    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+                        <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-800">
+                            <h3 className="font-semibold text-gray-900 dark:text-white">Select Icon</h3>
+                            <button onClick={() => setIconPickerModal({ isOpen: false, value: '', onSelect: null })} className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 p-1">
+                                <i className="ph ph-x text-[20px]"></i>
+                            </button>
+                        </div>
+                        <div className="p-4 overflow-y-auto custom-scrollbar grid grid-cols-5 sm:grid-cols-6 gap-2">
+                            {ICONS_LIST.map(icon => (
+                                <button
+                                    key={icon}
+                                    type="button"
+                                    onClick={() => { 
+                                        if (iconPickerModal.onSelect) iconPickerModal.onSelect(icon); 
+                                        setIconPickerModal({ isOpen: false, value: '', onSelect: null }); 
+                                    }}
+                                    className={`w-10 h-10 sm:w-12 sm:h-12 flex items-center justify-center rounded-lg transition-colors ${iconPickerModal.value === icon ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400 border border-blue-500' : 'bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:border-blue-400 dark:hover:border-blue-500'}`}
+                                    title={icon.replace('ph-', '').replace(/-/g, ' ')}
+                                >
+                                    <i className={`ph ${icon} text-[22px] sm:text-[24px]`}></i>
+                                </button>
+                            ))}
+                        </div>
                     </div>
                   </div>
                 )}
