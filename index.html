@@ -43,6 +43,8 @@
         /* Fallback color scheme */
         body { background-color: #f9fafb; color: #111827; }
         .dark body { background-color: #030712; color: #f3f4f6; }
+        /* Emoji icon alignment fix */
+        .emoji-icon { line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
     </style>
 </head>
 <body class="bg-gray-50 dark:bg-gray-950 transition-colors duration-200">
@@ -77,7 +79,6 @@
         // --- Helpers ---
         const generateId = () => Date.now().toString(36) + Math.random().toString(36).substring(2);
         
-        // Generates a local user ID to keep your data partitioned securely
         const getDeviceId = () => {
             let id = window.localStorage.getItem('budget_device_id');
             if (!id) {
@@ -87,6 +88,13 @@
             return id;
         };
         const DEVICE_ID = getDeviceId();
+
+        // Icon Renderer Helper (Handles Phosphor Icons & Custom Emojis)
+        const renderIcon = (iconStr, className = '', style = {}) => {
+            if (!iconStr) return <i className={`ph ph-tag ${className}`} style={style}></i>;
+            if (iconStr.startsWith('ph-')) return <i className={`ph ${iconStr} ${className}`} style={style}></i>;
+            return <span className={`emoji-icon ${className}`} style={{ ...style, fontStyle: 'normal' }}>{iconStr}</span>;
+        };
 
         // --- Preset Data ---
         const ACCOUNT_TYPES = [
@@ -143,7 +151,6 @@
           const [state, setState] = useState(initialValue);
           const [isLoaded, setIsLoaded] = useState(false);
 
-          // 1. Initial Load & Error Recovery
           useEffect(() => {
             const loadData = async () => {
                 if (!supabaseClient) {
@@ -162,7 +169,6 @@
                         .single();
 
                     if (error) {
-                        console.warn(`Supabase read error for ${key} (Expected if table is empty):`, error.message);
                         const local = window.localStorage.getItem(key);
                         if (local) setState(JSON.parse(local));
                     } else if (data && data.value) {
@@ -170,7 +176,6 @@
                         window.localStorage.setItem(key, JSON.stringify(data.value));
                     }
                 } catch (e) {
-                    console.warn(`Unexpected network error loading ${key}, falling back to local storage:`, e);
                     const local = window.localStorage.getItem(key);
                     if (local) setState(JSON.parse(local));
                 }
@@ -179,45 +184,27 @@
             loadData();
           }, [key]);
 
-          // 2. Realtime Subscription
           useEffect(() => {
-              if (!supabaseClient || !isLoaded) return;
+              const handleStorageChange = (e) => {
+                  if (e.key === key && e.newValue) {
+                      try { setState(JSON.parse(e.newValue)); } catch (err) {}
+                  }
+              };
+              window.addEventListener('storage', handleStorageChange);
+              return () => window.removeEventListener('storage', handleStorageChange);
+          }, [key]);
 
-              const channelName = `public:app_data:user_id=eq.${DEVICE_ID}:${key}`;
-              const channel = supabaseClient
-                .channel(channelName)
-                .on('postgres_changes', { event: '*', schema: 'public', table: 'app_data', filter: `user_id=eq.${DEVICE_ID}` }, 
-                (payload) => {
-                    if (payload.new && payload.new.key === key) {
-                        setState(payload.new.value);
-                        window.localStorage.setItem(key, JSON.stringify(payload.new.value));
-                    }
-                }).subscribe();
-
-              return () => { supabaseClient.removeChannel(channel); }
-          }, [key, isLoaded]);
-
-          // 3. Write Data Safely
           const setSyncedState = (newValueOrUpdater) => {
             setState(prev => {
               const newValue = typeof newValueOrUpdater === 'function' ? newValueOrUpdater(prev) : newValueOrUpdater;
-              
-              // Always save locally instantly so the UI never lags
               window.localStorage.setItem(key, JSON.stringify(newValue));
               
               if (supabaseClient) {
-                  // Safe upsert logic that prevents crashes even if the DB is misconfigured
                   supabaseClient.from('app_data')
-                    .select('id')
-                    .eq('user_id', DEVICE_ID)
-                    .eq('key', key)
-                    .single()
-                    .then(({data, error}) => {
-                        if (data && data.id) {
-                            supabaseClient.from('app_data').update({ value: newValue }).eq('id', data.id).then();
-                        } else {
-                            supabaseClient.from('app_data').insert({ user_id: DEVICE_ID, key: key, value: newValue }).then();
-                        }
+                    .select('id').eq('user_id', DEVICE_ID).eq('key', key).single()
+                    .then(({data}) => {
+                        if (data && data.id) supabaseClient.from('app_data').update({ value: newValue }).eq('id', data.id).then();
+                        else supabaseClient.from('app_data').insert({ user_id: DEVICE_ID, key: key, value: newValue }).then();
                     });
               }
               return newValue;
@@ -270,6 +257,7 @@
           const [listFilterSubcategory, setListFilterSubcategory] = useState('all');
           const [listFilterDateFrom, setListFilterDateFrom] = useState('');
           const [listFilterDateTo, setListFilterDateTo] = useState('');
+          const [listFilterSearch, setListFilterSearch] = useState('');
 
           const [selectedParentCategory, setSelectedParentCategory] = useState(null);
           const [hoveredPoint, setHoveredPoint] = useState(null);
@@ -288,15 +276,14 @@
           const [newAccountType, setNewAccountType] = useState('Liquid');
           const [newAccountBalance, setNewAccountBalance] = useState('');
 
-          // New states for Icon management
           const [newCatName, setNewCatName] = useState('');
           const [newCatColor, setNewCatColor] = useState('#8b5cf6');
           const [newCatIcon, setNewCatIcon] = useState('ph-tag');
           const [newCatType, setNewCatType] = useState('expense');
           const [newSubcatIcons, setNewSubcatIcons] = useState({});
           
-          // Icon Picker Modal State
           const [iconPickerModal, setIconPickerModal] = useState({ isOpen: false, value: '', onSelect: null });
+          const [customEmojiInput, setCustomEmojiInput] = useState('');
 
           const [showAllTransactions, setShowAllTransactions] = useState(false);
           const [isEditingBudgets, setIsEditingBudgets] = useState(false);
@@ -361,9 +348,18 @@
                     }
                 }
                 if (listFilterSubcategory !== 'all' && t.subcategory !== listFilterSubcategory) return false;
+                
+                if (listFilterSearch) {
+                    const searchLower = listFilterSearch.toLowerCase();
+                    const descMatch = t.description && t.description.toLowerCase().includes(searchLower);
+                    const catMatch = t.category && t.category.toLowerCase().includes(searchLower);
+                    const subMatch = t.subcategory && t.subcategory.toLowerCase().includes(searchLower);
+                    if (!descMatch && !catMatch && !subMatch) return false;
+                }
+                
                 return true;
              });
-          }, [dateFilteredTransactions, listFilterCategory, listFilterSubcategory]);
+          }, [dateFilteredTransactions, listFilterCategory, listFilterSubcategory, listFilterSearch]);
 
           const availableSubcategoriesFilters = useMemo(() => {
               if (listFilterCategory === 'all' || listFilterCategory === 'Transfer' || !allLoaded) return [];
@@ -546,7 +542,6 @@
             let data = [];
             
             if (filterMonth !== 'all' && filterYear !== 'all') {
-                // Group by Day
                 const daysInMonth = new Date(filterYear, filterMonth, 0).getDate();
                 data = Array.from({length: daysInMonth}, (_, i) => ({ label: (i+1).toString(), expense: 0, income: 0 }));
                 expenses.forEach(t => {
@@ -558,7 +553,6 @@
                     if (day && data[day - 1]) data[day - 1].income += parseFloat(t.amount);
                 });
             } else if (filterYear !== 'all') {
-                // Group by Month
                 const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
                 data = months.map(m => ({ label: m, expense: 0, income: 0 }));
                 expenses.forEach(t => {
@@ -570,7 +564,6 @@
                     if (month && data[month - 1]) data[month - 1].income += parseFloat(t.amount);
                 });
             } else {
-                // Group by Year
                 const yearsMap = {};
                 dateFilteredTransactions.forEach(t => {
                     const year = t.date.split('-')[0];
@@ -631,7 +624,6 @@
           const handleAddTransaction = (e) => {
             e.preventDefault();
             
-            // MATH EVALUATION LOGIC
             let finalAmount = formData.amount.toString().trim();
             if (finalAmount.startsWith('=')) {
                 try {
@@ -720,10 +712,10 @@
              setListFilterSubcategory('all');
              setListFilterDateFrom('');
              setListFilterDateTo('');
+             setListFilterSearch('');
              setSelectedParentCategory(null);
           };
 
-          // Settings functions (Categories, Accounts, Export, etc.)
           const handleAddSubcategory = (e, catName, type) => {
             e.preventDefault();
             const inputName = e.target.elements.subcatName.value.trim();
@@ -980,7 +972,7 @@
             if (totalValue === 0) {
               return (
                 <div className="flex flex-col items-center justify-center h-48 text-gray-500">
-                  <i className={`ph ${iconClass} text-[48px] mb-2 opacity-20`}></i>
+                  {renderIcon(iconClass, 'text-[48px] mb-2 opacity-20')}
                   <p className="text-center text-sm">{emptyMessage}</p>
                 </div>
               );
@@ -1418,7 +1410,7 @@
                               <div key={category.name} className={`flex items-center justify-between p-1.5 -mx-1.5 rounded-lg ${category.onClick ? 'hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer group' : ''}`} onClick={category.onClick}>
                                 <div className="flex items-center gap-2">
                                   <div className="w-6 h-6 rounded-full shrink-0 flex items-center justify-center border border-black/10 dark:border-gray-600/50" style={{ backgroundColor: category.color }}>
-                                    {category.icon ? <i className={`ph ${category.icon} text-white text-xs`}></i> : <div className="w-2 h-2 rounded-full bg-white/50"></div>}
+                                    {renderIcon(category.icon, 'text-white text-xs')}
                                   </div>
                                   <span className={`text-sm text-gray-700 dark:text-gray-300 truncate ${category.onClick ? 'group-hover:text-gray-900 dark:group-hover:text-white' : ''}`} title={category.name}>{category.name}</span>
                                 </div>
@@ -1497,6 +1489,11 @@
                             {availableSubcategoriesFilters.map(sub => <option key={sub} value={sub}>{sub}</option>)}
                           </select>
                         )}
+                        
+                        <div className="flex items-center gap-1 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded pl-2 pr-1 py-0.5 flex-1 min-w-[120px]">
+                          <i className="ph ph-magnifying-glass text-gray-400 dark:text-gray-500 text-xs"></i>
+                          <input type="text" placeholder="Search transactions..." value={listFilterSearch} onChange={e => setListFilterSearch(e.target.value)} className="bg-transparent text-gray-700 dark:text-gray-300 focus:outline-none text-xs w-full" />
+                        </div>
 
                         <div className="flex items-center gap-1 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded pl-2 pr-1 py-0.5">
                           <span className="text-gray-500 text-xs">From</span>
@@ -1507,7 +1504,7 @@
                           <input type="date" value={listFilterDateTo} onChange={e => setListFilterDateTo(e.target.value)} className="bg-transparent text-gray-700 dark:text-gray-300 focus:outline-none [color-scheme:light] dark:[color-scheme:dark] text-xs cursor-pointer" />
                         </div>
 
-                        {(listFilterCategory !== 'all' || listFilterSubcategory !== 'all' || listFilterDateFrom || listFilterDateTo) && (
+                        {(listFilterCategory !== 'all' || listFilterSubcategory !== 'all' || listFilterDateFrom || listFilterDateTo || listFilterSearch) && (
                           <button onClick={clearListFilters} className="text-gray-500 dark:text-gray-400 hover:text-red-500 dark:hover:text-red-400 px-2 py-1 text-xs font-medium transition-colors">Clear</button>
                         )}
                       </div>
@@ -1545,7 +1542,7 @@
                               <div key={transaction.id} className={`flex items-center justify-between p-3 rounded-lg border transition-colors group ${editingTransactionId === transaction.id ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-300 dark:border-blue-500/50' : 'bg-gray-50 dark:bg-gray-900/50 hover:bg-gray-100 dark:hover:bg-gray-900 border-gray-200 dark:border-gray-800'}`}>
                                 <div className="flex items-center gap-4 overflow-hidden">
                                   <div className="p-2 rounded-lg shrink-0 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700/50 flex items-center justify-center w-10 h-10">
-                                    <i className={`ph ${catIcon} text-[20px]`} style={{color: catColor}}></i>
+                                    {renderIcon(catIcon, 'text-[20px]', { color: catColor })}
                                   </div>
                                   <div className="truncate">
                                     <p className="text-sm font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
@@ -1553,7 +1550,7 @@
                                       {transaction.subcategory && (
                                         <>
                                           <i className="ph ph-caret-right text-[12px] text-gray-400 dark:text-gray-500 shrink-0"></i>
-                                          <i className={`ph ${subIcon} text-[12px] text-gray-500 dark:text-gray-400 shrink-0`}></i>
+                                          {renderIcon(subIcon, 'text-[12px] text-gray-500 dark:text-gray-400 shrink-0')}
                                           <span className="truncate text-gray-700 dark:text-gray-300 font-semibold">{transaction.subcategory}</span>
                                         </>
                                       )}
@@ -1759,7 +1756,7 @@
                                         <div className="flex items-center gap-2">
                                           <input type="color" value={editingCategory.color} onChange={e => setEditingCategory({...editingCategory, color: e.target.value})} className="w-8 h-8 rounded cursor-pointer bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-0.5 shrink-0" title="Select Color" />
                                           <button type="button" onClick={() => setIconPickerModal({ isOpen: true, value: editingCategory.icon, onSelect: (icon) => setEditingCategory({...editingCategory, icon}) })} className="w-8 h-8 rounded bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 flex items-center justify-center text-gray-900 dark:text-white shrink-0 hover:border-blue-500 transition-colors" title="Select Icon">
-                                            <i className={`ph ${editingCategory.icon || 'ph-tag'} text-[18px]`}></i>
+                                            {renderIcon(editingCategory.icon, 'text-[18px]')}
                                           </button>
                                           <input type="text" value={editingCategory.name} onChange={e => setEditingCategory({...editingCategory, name: e.target.value})} className="flex-1 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded py-1 px-2 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-blue-500" required />
                                         </div>
@@ -1771,7 +1768,7 @@
                                   ) : (
                                   <div className="flex items-center justify-between">
                                     <div className="flex items-center gap-3">
-                                      <div className="w-6 h-6 rounded-full flex items-center justify-center border border-black/10 dark:border-gray-600/50 shrink-0" style={{ backgroundColor: cat.color }}><i className={`ph ${cat.icon || 'ph-tag'} text-white text-xs`}></i></div>
+                                      <div className="w-6 h-6 rounded-full flex items-center justify-center border border-black/10 dark:border-gray-600/50 shrink-0" style={{ backgroundColor: cat.color }}>{renderIcon(cat.icon, 'text-white text-xs')}</div>
                                       <span className="font-medium text-gray-900 dark:text-gray-200 truncate">{cat.name}</span>
                                     </div>
                                     <div className="flex items-center gap-1 shrink-0">
@@ -1789,7 +1786,7 @@
                                         editingSubcategory?.originalName === sub.name && editingSubcategory?.categoryName === cat.name && editingSubcategory?.type === newCatType ? (
                                           <form key={sub.name} onSubmit={handleUpdateSubcategory} className="flex items-center gap-2 bg-white dark:bg-gray-900/50 p-1.5 rounded border border-gray-200 dark:border-gray-700">
                                             <button type="button" onClick={() => setIconPickerModal({ isOpen: true, value: editingSubcategory.icon, onSelect: (icon) => setEditingSubcategory({...editingSubcategory, icon}) })} className="w-7 h-7 rounded bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-600 flex items-center justify-center text-gray-900 dark:text-white shrink-0 hover:border-blue-500 transition-colors" title="Select Icon">
-                                                <i className={`ph ${editingSubcategory.icon || 'ph-tag'} text-[14px]`}></i>
+                                                {renderIcon(editingSubcategory.icon, 'text-[14px]')}
                                             </button>
                                             <input type="text" value={editingSubcategory.name} onChange={e => setEditingSubcategory({...editingSubcategory, name: e.target.value})} className="flex-1 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded py-1 px-2 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-blue-500" required />
                                             <button type="submit" className="text-blue-600 dark:text-blue-400 hover:text-blue-500 dark:hover:text-blue-300 p-1"><i className="ph ph-check text-[14px]"></i></button>
@@ -1797,7 +1794,7 @@
                                           </form>
                                         ) : (
                                           <div key={sub.name} className="flex items-center justify-between bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700/50 rounded p-1.5 text-xs text-gray-700 dark:text-gray-300">
-                                            <div className="flex items-center gap-2"><i className={`ph ${sub.icon || 'ph-tag'} text-gray-500 dark:text-gray-400 text-[14px]`}></i><span className="truncate">{sub.name}</span></div>
+                                            <div className="flex items-center gap-2">{renderIcon(sub.icon, 'text-gray-500 dark:text-gray-400 text-[14px]')}<span className="truncate">{sub.name}</span></div>
                                             <div className="flex items-center gap-1 shrink-0">
                                               <button type="button" onClick={() => setEditingSubcategory({ categoryName: cat.name, originalName: sub.name, name: sub.name, icon: sub.icon || 'ph-tag', type: newCatType })} className="text-gray-400 hover:text-blue-500 p-0.5"><i className="ph ph-pencil-simple text-[12px]"></i></button>
                                               <button type="button" onClick={() => handleRemoveSubcategory(cat.name, newCatType, sub.name)} className="text-gray-400 hover:text-red-500 p-0.5"><i className="ph ph-trash text-[12px]"></i></button>
@@ -1808,7 +1805,7 @@
                                     </div>
                                     <form onSubmit={(e) => handleAddSubcategory(e, cat.name, newCatType)} className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-200 dark:border-gray-800">
                                       <button type="button" onClick={() => setIconPickerModal({ isOpen: true, value: newSubcatIcons[cat.name] || 'ph-tag', onSelect: (icon) => setNewSubcatIcons(prev => ({...prev, [cat.name]: icon})) })} className="w-8 h-8 rounded bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 flex items-center justify-center text-gray-900 dark:text-white shrink-0 hover:border-blue-500 transition-colors" title="Select Icon">
-                                        <i className={`ph ${newSubcatIcons[cat.name] || 'ph-tag'} text-[16px]`}></i>
+                                        {renderIcon(newSubcatIcons[cat.name], 'text-[16px]')}
                                       </button>
                                       <input name="subcatName" type="text" placeholder="New subcategory..." className="flex-1 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded py-1.5 px-2 text-xs text-gray-900 dark:text-white focus:outline-none focus:border-blue-500" />
                                       <button type="submit" className="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-white px-2 py-1.5 rounded text-xs transition-colors font-medium">Add</button>
@@ -1823,7 +1820,7 @@
                               <div className="flex gap-2">
                                 <input type="color" value={newCatColor} onChange={(e) => setNewCatColor(e.target.value)} className="w-10 h-10 rounded cursor-pointer bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 p-1 shrink-0" title="Select Color" />
                                 <button type="button" onClick={() => setIconPickerModal({ isOpen: true, value: newCatIcon, onSelect: setNewCatIcon })} className="w-10 h-10 rounded bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 flex items-center justify-center text-gray-900 dark:text-white shrink-0 hover:border-blue-500 transition-colors" title="Select Icon">
-                                    <i className={`ph ${newCatIcon} text-[20px]`}></i>
+                                    {renderIcon(newCatIcon, 'text-[20px]')}
                                 </button>
                                 <input type="text" value={newCatName} onChange={(e) => setNewCatName(e.target.value)} placeholder="Category Name" className="flex-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg py-2 px-3 text-gray-900 dark:text-white focus:outline-none focus:border-blue-500" />
                                 <button type="submit" disabled={!newCatName} className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-3 py-2 rounded-lg font-medium">Add</button>
@@ -1882,10 +1879,41 @@
                     <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
                         <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-800">
                             <h3 className="font-semibold text-gray-900 dark:text-white">Select Icon</h3>
-                            <button onClick={() => setIconPickerModal({ isOpen: false, value: '', onSelect: null })} className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 p-1">
+                            <button onClick={() => { setIconPickerModal({ isOpen: false, value: '', onSelect: null }); setCustomEmojiInput(''); }} className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 p-1">
                                 <i className="ph ph-x text-[20px]"></i>
                             </button>
                         </div>
+                        
+                        {/* Custom Emoji Input Area */}
+                        <div className="p-4 border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/50">
+                            <label className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2 block uppercase tracking-wide">Or Use Custom Emoji</label>
+                            <div className="flex gap-2">
+                                <input 
+                                    type="text" 
+                                    maxLength="2" 
+                                    value={customEmojiInput} 
+                                    onChange={e => setCustomEmojiInput(e.target.value)} 
+                                    placeholder="🍔" 
+                                    className="w-16 text-center text-[20px] bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg py-1.5 focus:outline-none focus:border-blue-500" 
+                                />
+                                <button 
+                                    type="button" 
+                                    disabled={!customEmojiInput}
+                                    onClick={() => { 
+                                        if (customEmojiInput && iconPickerModal.onSelect) {
+                                            iconPickerModal.onSelect(customEmojiInput); 
+                                            setIconPickerModal({ isOpen: false, value: '', onSelect: null }); 
+                                            setCustomEmojiInput('');
+                                        }
+                                    }} 
+                                    className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 rounded-lg text-sm font-medium transition-colors"
+                                >
+                                    Apply Emoji
+                                </button>
+                            </div>
+                            <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">Paste any single emoji from your keyboard to use it as an icon.</p>
+                        </div>
+
                         <div className="p-4 overflow-y-auto custom-scrollbar grid grid-cols-5 sm:grid-cols-6 gap-2">
                             {ICONS_LIST.map(icon => (
                                 <button
@@ -1894,6 +1922,7 @@
                                     onClick={() => { 
                                         if (iconPickerModal.onSelect) iconPickerModal.onSelect(icon); 
                                         setIconPickerModal({ isOpen: false, value: '', onSelect: null }); 
+                                        setCustomEmojiInput('');
                                     }}
                                     className={`w-10 h-10 sm:w-12 sm:h-12 flex items-center justify-center rounded-lg transition-colors ${iconPickerModal.value === icon ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400 border border-blue-500' : 'bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:border-blue-400 dark:hover:border-blue-500'}`}
                                     title={icon.replace('ph-', '').replace(/-/g, ' ')}
