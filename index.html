@@ -225,6 +225,8 @@
         function App() {
           const currentDate = new Date();
           
+          const [isExpandedViewOpen, setIsExpandedViewOpen] = useState(false);
+          
           const [theme, setTheme, themeLoaded] = useSupabaseSyncedState('budget_theme', 'dark');
 
           useEffect(() => {
@@ -683,6 +685,10 @@
               toAccountId: transaction.toAccountId || '',
               isInvestment: transaction.isInvestment || false
             });
+            
+            if (isExpandedViewOpen) {
+                setIsExpandedViewOpen(false);
+            }
             window.scrollTo({ top: 0, behavior: 'smooth' });
           };
 
@@ -1151,6 +1157,135 @@
             );
           };
 
+          const renderTransactionsUI = () => {
+            const txsToDisplay = showAllTransactions ? displayedTransactions : displayedTransactions.slice(0, 4);
+            
+            return (
+              <Card className="p-6 flex flex-col flex-1">
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-lg font-semibold flex items-center gap-2 text-gray-900 dark:text-white">
+                    <i className="ph ph-receipt text-gray-400 text-[20px]"></i> Transactions
+                  </h2>
+                  <button onClick={() => setIsExpandedViewOpen(true)} className="text-sm text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 transition-colors font-medium flex items-center gap-1">
+                    Expanded View <i className="ph ph-arrows-out-simple"></i>
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 mb-4 p-2.5 bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 text-sm">
+                  <i className="ph ph-funnel text-gray-400 dark:text-gray-500 ml-1"></i>
+                  <select value={listFilterCategory} onChange={(e) => { const val = e.target.value; setListFilterCategory(val); setListFilterSubcategory('all'); if (val === 'all' || val === 'Transfer') { setSelectedParentCategory(null); } else { const isExpense = expenseCategories.some(c => c.name === val); setSelectedParentCategory(isExpense ? val : null); } }} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded py-1 px-2 text-gray-700 dark:text-gray-300 focus:outline-none focus:border-blue-500 cursor-pointer">
+                    <option value="all">All Categories</option>
+                    <option value="Transfer">Transfers</option>
+                    <optgroup label="Expenses">{expenseCategories.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}</optgroup>
+                    <optgroup label="Income">{incomeCategories.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}</optgroup>
+                  </select>
+                  
+                  {availableSubcategoriesFilters.length > 0 && (
+                    <select value={listFilterSubcategory} onChange={(e) => setListFilterSubcategory(e.target.value)} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded py-1 px-2 text-gray-700 dark:text-gray-300 focus:outline-none focus:border-blue-500 cursor-pointer">
+                      <option value="all">All Subcategories</option>
+                      {availableSubcategoriesFilters.map(sub => <option key={sub} value={sub}>{sub}</option>)}
+                    </select>
+                  )}
+                  
+                  <div className="flex items-center gap-1 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded pl-2 pr-1 py-0.5 flex-1 min-w-[120px]">
+                    <i className="ph ph-magnifying-glass text-gray-400 dark:text-gray-500 text-xs"></i>
+                    <input type="text" placeholder="Search transactions..." value={listFilterSearch} onChange={e => setListFilterSearch(e.target.value)} className="bg-transparent text-gray-700 dark:text-gray-300 focus:outline-none text-xs w-full" />
+                  </div>
+
+                  <div className="flex items-center gap-1 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded pl-2 pr-1 py-0.5">
+                    <span className="text-gray-500 text-xs">From</span>
+                    <input type="date" value={listFilterDateFrom} onChange={e => setListFilterDateFrom(e.target.value)} className="bg-transparent text-gray-700 dark:text-gray-300 focus:outline-none [color-scheme:light] dark:[color-scheme:dark] text-xs cursor-pointer" />
+                  </div>
+                  <div className="flex items-center gap-1 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded pl-2 pr-1 py-0.5">
+                    <span className="text-gray-500 text-xs">To</span>
+                    <input type="date" value={listFilterDateTo} onChange={e => setListFilterDateTo(e.target.value)} className="bg-transparent text-gray-700 dark:text-gray-300 focus:outline-none [color-scheme:light] dark:[color-scheme:dark] text-xs cursor-pointer" />
+                  </div>
+
+                  {(listFilterCategory !== 'all' || listFilterSubcategory !== 'all' || listFilterDateFrom || listFilterDateTo || listFilterSearch) && (
+                    <button onClick={clearListFilters} className="text-gray-500 dark:text-gray-400 hover:text-red-500 dark:hover:text-red-400 px-2 py-1 text-xs font-medium transition-colors">Clear</button>
+                  )}
+                </div>
+                
+                <div className="space-y-3 overflow-y-auto pr-2 custom-scrollbar max-h-[300px]">
+                  {displayedTransactions.length === 0 ? (
+                    <p className="text-gray-500 text-center py-6">No matching transactions found.</p>
+                  ) : (
+                    txsToDisplay.map((transaction) => {
+                      const isTransfer = transaction.type === 'transfer';
+                      const isTransferIn = isTransfer && transaction.toAccountId === (currentAccountId === 'all' ? null : currentAccountId);
+                      const isIncome = transaction.type === 'income' || isTransferIn;
+                      
+                      const catObj = isTransfer ? null : (isIncome ? incomeCategories.find(c=>c.name===transaction.category) : expenseCategories.find(c=>c.name===transaction.category));
+                      const catIcon = isTransfer ? 'ph-arrows-left-right' : (catObj?.icon || 'ph-tag');
+                      const catColor = isTransfer ? '#3b82f6' : (catObj?.color || '#9ca3af');
+                      const subObj = catObj ? normalizeSubcats(catObj.subcategories).find(s => s.name === transaction.subcategory) : null;
+                      const subIcon = subObj?.icon || 'ph-tag';
+                      
+                      let descText = transaction.description;
+                      if (isTransfer && !descText) {
+                         const fromAccObj = accounts.find(a => a.id === transaction.fromAccountId);
+                         const toAccObj = accounts.find(a => a.id === transaction.toAccountId);
+                         const fromAccName = fromAccObj?.name || 'Unknown';
+                         const toAccName = toAccObj?.name || 'Unknown';
+                         if (currentAccountId === 'all') descText = `${fromAccName} → ${toAccName}`;
+                         else descText = (isTransferIn ? `Transfer from ${fromAccName}` : `Transfer to ${toAccName}`);
+                      }
+                      if (!descText) descText = "No description provided";
+
+                      const displayAccountObj = accounts.find(a => a.id === (isTransfer ? transaction.fromAccountId : transaction.accountId));
+                      const displayAccountName = displayAccountObj?.name || 'Unknown Account';
+
+                      return (
+                        <div key={transaction.id} className={`flex items-center justify-between p-3 rounded-lg border transition-colors group ${editingTransactionId === transaction.id ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-300 dark:border-blue-500/50' : 'bg-gray-50 dark:bg-gray-900/50 hover:bg-gray-100 dark:hover:bg-gray-900 border-gray-200 dark:border-gray-800'}`}>
+                          <div className="flex items-center gap-4 overflow-hidden">
+                            <div className="p-2 rounded-lg shrink-0 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700/50 flex items-center justify-center w-10 h-10">
+                              {renderIcon(catIcon, 'text-[20px]', { color: catColor })}
+                            </div>
+                            <div className="truncate">
+                              <p className="text-sm font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                                <span className="truncate">{isTransfer ? 'Transfer' : transaction.category}</span>
+                                {transaction.subcategory && (
+                                  <>
+                                    <i className="ph ph-caret-right text-[12px] text-gray-400 dark:text-gray-500 shrink-0"></i>
+                                    {renderIcon(subIcon, 'text-[12px] text-gray-500 dark:text-gray-400 shrink-0')}
+                                    <span className="truncate text-gray-700 dark:text-gray-300 font-semibold">{transaction.subcategory}</span>
+                                  </>
+                                )}
+                                {transaction.isInvestment && <span className="text-[9px] font-bold uppercase tracking-wider bg-purple-100 dark:bg-purple-500/20 text-purple-600 dark:text-purple-400 px-1.5 py-0.5 rounded shrink-0 border border-purple-200 dark:border-purple-500/30">Inv</span>}
+                                {currentAccountId === 'all' && !isTransfer && <span className="text-[9px] font-semibold uppercase tracking-wider bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-gray-400 px-1.5 py-0.5 rounded shrink-0 border border-gray-300 dark:border-gray-700 truncate max-w-[100px]">{displayAccountName}</span>}
+                              </p>
+                              <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate">
+                                <span className="truncate max-w-[150px] sm:max-w-[200px]">{descText}</span>
+                                <span className="shrink-0">•</span>
+                                <span className="shrink-0">{new Date(transaction.date).toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className={`font-semibold ${isTransfer ? (currentAccountId === 'all' ? 'text-blue-600 dark:text-blue-400' : (isTransferIn ? 'text-green-600 dark:text-green-500' : 'text-gray-900 dark:text-gray-100')) : (isIncome ? 'text-green-600 dark:text-green-500' : 'text-gray-900 dark:text-gray-100')}`}>
+                              {isIncome || (isTransfer && currentAccountId === 'all') ? '' : '-'}{formatCurrency(transaction.amount)}
+                            </span>
+                            <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity ml-2">
+                              <button onClick={() => handleEditTransaction(transaction)} className="text-gray-400 hover:text-blue-500 dark:text-gray-500 dark:hover:text-blue-400 p-1.5 transition-colors" title="Edit"><i className="ph ph-pencil-simple text-[16px]"></i></button>
+                              <button onClick={() => handleDelete(transaction.id)} className="text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400 p-1.5 transition-colors" title="Delete"><i className="ph ph-trash text-[16px]"></i></button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+                {displayedTransactions.length > 4 && (
+                  <div className="mt-4 text-right border-t border-gray-200 dark:border-gray-800 pt-3">
+                    <button onClick={() => setShowAllTransactions(!showAllTransactions)} className="text-sm text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 transition-colors font-medium">
+                      {showAllTransactions ? 'Show less' : 'Show all'}
+                    </button>
+                  </div>
+                )}
+              </Card>
+            );
+          };
+
           if (!allLoaded) {
             return (
               <div className="flex justify-center items-center h-screen">
@@ -1467,125 +1602,7 @@
                     </Card>
 
                     {/* Transaction History Section */}
-                    <Card className="p-6 flex-1">
-                      <div className="flex items-center justify-between mb-3">
-                        <h2 className="text-lg font-semibold flex items-center gap-2 text-gray-900 dark:text-white">
-                          <i className="ph ph-receipt text-gray-400 text-[20px]"></i> Transactions
-                        </h2>
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-2 mb-4 p-2.5 bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 text-sm">
-                        <i className="ph ph-funnel text-gray-400 dark:text-gray-500 ml-1"></i>
-                        <select value={listFilterCategory} onChange={(e) => { const val = e.target.value; setListFilterCategory(val); setListFilterSubcategory('all'); if (val === 'all' || val === 'Transfer') { setSelectedParentCategory(null); } else { const isExpense = expenseCategories.some(c => c.name === val); setSelectedParentCategory(isExpense ? val : null); } }} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded py-1 px-2 text-gray-700 dark:text-gray-300 focus:outline-none focus:border-blue-500 cursor-pointer">
-                          <option value="all">All Categories</option>
-                          <option value="Transfer">Transfers</option>
-                          <optgroup label="Expenses">{expenseCategories.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}</optgroup>
-                          <optgroup label="Income">{incomeCategories.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}</optgroup>
-                        </select>
-                        
-                        {availableSubcategoriesFilters.length > 0 && (
-                          <select value={listFilterSubcategory} onChange={(e) => setListFilterSubcategory(e.target.value)} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded py-1 px-2 text-gray-700 dark:text-gray-300 focus:outline-none focus:border-blue-500 cursor-pointer">
-                            <option value="all">All Subcategories</option>
-                            {availableSubcategoriesFilters.map(sub => <option key={sub} value={sub}>{sub}</option>)}
-                          </select>
-                        )}
-                        
-                        <div className="flex items-center gap-1 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded pl-2 pr-1 py-0.5 flex-1 min-w-[120px]">
-                          <i className="ph ph-magnifying-glass text-gray-400 dark:text-gray-500 text-xs"></i>
-                          <input type="text" placeholder="Search transactions..." value={listFilterSearch} onChange={e => setListFilterSearch(e.target.value)} className="bg-transparent text-gray-700 dark:text-gray-300 focus:outline-none text-xs w-full" />
-                        </div>
-
-                        <div className="flex items-center gap-1 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded pl-2 pr-1 py-0.5">
-                          <span className="text-gray-500 text-xs">From</span>
-                          <input type="date" value={listFilterDateFrom} onChange={e => setListFilterDateFrom(e.target.value)} className="bg-transparent text-gray-700 dark:text-gray-300 focus:outline-none [color-scheme:light] dark:[color-scheme:dark] text-xs cursor-pointer" />
-                        </div>
-                        <div className="flex items-center gap-1 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded pl-2 pr-1 py-0.5">
-                          <span className="text-gray-500 text-xs">To</span>
-                          <input type="date" value={listFilterDateTo} onChange={e => setListFilterDateTo(e.target.value)} className="bg-transparent text-gray-700 dark:text-gray-300 focus:outline-none [color-scheme:light] dark:[color-scheme:dark] text-xs cursor-pointer" />
-                        </div>
-
-                        {(listFilterCategory !== 'all' || listFilterSubcategory !== 'all' || listFilterDateFrom || listFilterDateTo || listFilterSearch) && (
-                          <button onClick={clearListFilters} className="text-gray-500 dark:text-gray-400 hover:text-red-500 dark:hover:text-red-400 px-2 py-1 text-xs font-medium transition-colors">Clear</button>
-                        )}
-                      </div>
-                      
-                      <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-                        {displayedTransactions.length === 0 ? (
-                          <p className="text-gray-500 text-center py-6">No matching transactions found.</p>
-                        ) : (
-                          (showAllTransactions ? displayedTransactions : displayedTransactions.slice(0, 4)).map((transaction) => {
-                            const isTransfer = transaction.type === 'transfer';
-                            const isTransferIn = isTransfer && transaction.toAccountId === (currentAccountId === 'all' ? null : currentAccountId);
-                            const isIncome = transaction.type === 'income' || isTransferIn;
-                            
-                            const catObj = isTransfer ? null : (isIncome ? incomeCategories.find(c=>c.name===transaction.category) : expenseCategories.find(c=>c.name===transaction.category));
-                            const catIcon = isTransfer ? 'ph-arrows-left-right' : (catObj?.icon || 'ph-tag');
-                            const catColor = isTransfer ? '#3b82f6' : (catObj?.color || '#9ca3af');
-                            const subObj = catObj ? normalizeSubcats(catObj.subcategories).find(s => s.name === transaction.subcategory) : null;
-                            const subIcon = subObj?.icon || 'ph-tag';
-                            
-                            let descText = transaction.description;
-                            if (isTransfer && !descText) {
-                               const fromAccObj = accounts.find(a => a.id === transaction.fromAccountId);
-                               const toAccObj = accounts.find(a => a.id === transaction.toAccountId);
-                               const fromAccName = fromAccObj?.name || 'Unknown';
-                               const toAccName = toAccObj?.name || 'Unknown';
-                               if (currentAccountId === 'all') descText = `${fromAccName} → ${toAccName}`;
-                               else descText = (isTransferIn ? `Transfer from ${fromAccName}` : `Transfer to ${toAccName}`);
-                            }
-                            if (!descText) descText = "No description provided";
-
-                            const displayAccountObj = accounts.find(a => a.id === (isTransfer ? transaction.fromAccountId : transaction.accountId));
-                            const displayAccountName = displayAccountObj?.name || 'Unknown Account';
-
-                            return (
-                              <div key={transaction.id} className={`flex items-center justify-between p-3 rounded-lg border transition-colors group ${editingTransactionId === transaction.id ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-300 dark:border-blue-500/50' : 'bg-gray-50 dark:bg-gray-900/50 hover:bg-gray-100 dark:hover:bg-gray-900 border-gray-200 dark:border-gray-800'}`}>
-                                <div className="flex items-center gap-4 overflow-hidden">
-                                  <div className="p-2 rounded-lg shrink-0 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700/50 flex items-center justify-center w-10 h-10">
-                                    {renderIcon(catIcon, 'text-[20px]', { color: catColor })}
-                                  </div>
-                                  <div className="truncate">
-                                    <p className="text-sm font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-                                      <span className="truncate">{isTransfer ? 'Transfer' : transaction.category}</span>
-                                      {transaction.subcategory && (
-                                        <>
-                                          <i className="ph ph-caret-right text-[12px] text-gray-400 dark:text-gray-500 shrink-0"></i>
-                                          {renderIcon(subIcon, 'text-[12px] text-gray-500 dark:text-gray-400 shrink-0')}
-                                          <span className="truncate text-gray-700 dark:text-gray-300 font-semibold">{transaction.subcategory}</span>
-                                        </>
-                                      )}
-                                      {transaction.isInvestment && <span className="text-[9px] font-bold uppercase tracking-wider bg-purple-100 dark:bg-purple-500/20 text-purple-600 dark:text-purple-400 px-1.5 py-0.5 rounded shrink-0 border border-purple-200 dark:border-purple-500/30">Inv</span>}
-                                      {currentAccountId === 'all' && !isTransfer && <span className="text-[9px] font-semibold uppercase tracking-wider bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-gray-400 px-1.5 py-0.5 rounded shrink-0 border border-gray-300 dark:border-gray-700 truncate max-w-[100px]">{displayAccountName}</span>}
-                                    </p>
-                                    <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate">
-                                      <span className="truncate max-w-[150px] sm:max-w-[200px]">{descText}</span>
-                                      <span className="shrink-0">•</span>
-                                      <span className="shrink-0">{new Date(transaction.date).toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
-                                    </div>
-                                  </div>
-                                </div>
-                                <div className="flex items-center gap-2 shrink-0">
-                                  <span className={`font-semibold ${isTransfer ? (currentAccountId === 'all' ? 'text-blue-600 dark:text-blue-400' : (isTransferIn ? 'text-green-600 dark:text-green-500' : 'text-gray-900 dark:text-gray-100')) : (isIncome ? 'text-green-600 dark:text-green-500' : 'text-gray-900 dark:text-gray-100')}`}>
-                                    {isIncome || (isTransfer && currentAccountId === 'all') ? '' : '-'}{formatCurrency(transaction.amount)}
-                                  </span>
-                                  <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity ml-2">
-                                    <button onClick={() => handleEditTransaction(transaction)} className="text-gray-400 hover:text-blue-500 dark:text-gray-500 dark:hover:text-blue-400 p-1.5 transition-colors" title="Edit"><i className="ph ph-pencil-simple text-[16px]"></i></button>
-                                    <button onClick={() => handleDelete(transaction.id)} className="text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400 p-1.5 transition-colors" title="Delete"><i className="ph ph-trash text-[16px]"></i></button>
-                                  </div>
-                                </div>
-                              </div>
-                            );
-                          })
-                        )}
-                      </div>
-                      {displayedTransactions.length > 4 && (
-                        <div className="mt-4 text-right border-t border-gray-200 dark:border-gray-800 pt-3">
-                          <button onClick={() => setShowAllTransactions(!showAllTransactions)} className="text-sm text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 transition-colors font-medium">
-                            {showAllTransactions ? 'Show less' : 'Show all'}
-                          </button>
-                        </div>
-                      )}
-                    </Card>
+                    {renderTransactionsUI()}
 
                     <Card className="p-6 flex-1">
                       <div className="flex items-center justify-between mb-6">
@@ -1949,6 +1966,152 @@
                          <button onClick={confirmDialog.onConfirm} className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2.5 rounded-lg font-medium transition-colors">Confirm</button>
                        </div>
                      </div>
+                  </div>
+                )}
+
+                {/* Expanded Transactions View Modal */}
+                {isExpandedViewOpen && (
+                  <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-black/40 dark:bg-black/70 backdrop-blur-sm">
+                    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl w-full max-w-6xl overflow-hidden shadow-2xl flex flex-col h-[90vh]">
+                        <div className="flex items-center justify-between p-5 border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/50">
+                            <h2 className="text-xl font-bold flex items-center gap-2 text-gray-900 dark:text-white">
+                              <i className="ph ph-table text-blue-600 dark:text-blue-500 text-[24px]"></i> Expanded Transactions View
+                            </h2>
+                            <button onClick={() => setIsExpandedViewOpen(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-white p-1 transition-colors">
+                              <i className="ph ph-x text-[24px]"></i>
+                            </button>
+                        </div>
+                        
+                        {/* Filters matching the dashboard */}
+                        <div className="p-4 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900">
+                            <div className="flex flex-wrap items-center gap-2 text-sm">
+                                <i className="ph ph-funnel text-gray-400 dark:text-gray-500 ml-1"></i>
+                                <select value={listFilterCategory} onChange={(e) => { const val = e.target.value; setListFilterCategory(val); setListFilterSubcategory('all'); if (val === 'all' || val === 'Transfer') { setSelectedParentCategory(null); } else { const isExpense = expenseCategories.some(c => c.name === val); setSelectedParentCategory(isExpense ? val : null); } }} className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded py-1.5 px-2 text-gray-700 dark:text-gray-300 focus:outline-none focus:border-blue-500 cursor-pointer">
+                                  <option value="all">All Categories</option>
+                                  <option value="Transfer">Transfers</option>
+                                  <optgroup label="Expenses">{expenseCategories.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}</optgroup>
+                                  <optgroup label="Income">{incomeCategories.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}</optgroup>
+                                </select>
+                                
+                                {availableSubcategoriesFilters.length > 0 && (
+                                  <select value={listFilterSubcategory} onChange={(e) => setListFilterSubcategory(e.target.value)} className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded py-1.5 px-2 text-gray-700 dark:text-gray-300 focus:outline-none focus:border-blue-500 cursor-pointer">
+                                    <option value="all">All Subcategories</option>
+                                    {availableSubcategoriesFilters.map(sub => <option key={sub} value={sub}>{sub}</option>)}
+                                  </select>
+                                )}
+                                
+                                <div className="flex items-center gap-1 border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 rounded pl-2 pr-1 py-1 flex-1 min-w-[120px]">
+                                  <i className="ph ph-magnifying-glass text-gray-400 dark:text-gray-500 text-sm"></i>
+                                  <input type="text" placeholder="Search..." value={listFilterSearch} onChange={e => setListFilterSearch(e.target.value)} className="bg-transparent text-gray-700 dark:text-gray-300 focus:outline-none text-sm w-full" />
+                                </div>
+
+                                <div className="flex items-center gap-1 border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 rounded pl-2 pr-1 py-1">
+                                  <span className="text-gray-500 text-sm">From</span>
+                                  <input type="date" value={listFilterDateFrom} onChange={e => setListFilterDateFrom(e.target.value)} className="bg-transparent text-gray-700 dark:text-gray-300 focus:outline-none [color-scheme:light] dark:[color-scheme:dark] text-sm cursor-pointer" />
+                                </div>
+                                <div className="flex items-center gap-1 border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 rounded pl-2 pr-1 py-1">
+                                  <span className="text-gray-500 text-sm">To</span>
+                                  <input type="date" value={listFilterDateTo} onChange={e => setListFilterDateTo(e.target.value)} className="bg-transparent text-gray-700 dark:text-gray-300 focus:outline-none [color-scheme:light] dark:[color-scheme:dark] text-sm cursor-pointer" />
+                                </div>
+
+                                {(listFilterCategory !== 'all' || listFilterSubcategory !== 'all' || listFilterDateFrom || listFilterDateTo || listFilterSearch) && (
+                                  <button onClick={clearListFilters} className="text-gray-500 dark:text-gray-400 hover:text-red-500 dark:hover:text-red-400 px-3 py-1.5 text-sm font-medium transition-colors">Clear</button>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Table View */}
+                        <div className="flex-1 overflow-auto custom-scrollbar bg-white dark:bg-gray-900">
+                            <table className="w-full text-sm text-left border-collapse">
+                                <thead className="bg-gray-50 dark:bg-gray-800/80 sticky top-0 z-10 shadow-sm border-b border-gray-200 dark:border-gray-700">
+                                    <tr>
+                                        <th className="px-6 py-4 font-semibold text-gray-600 dark:text-gray-300 whitespace-nowrap">Date</th>
+                                        <th className="px-6 py-4 font-semibold text-gray-600 dark:text-gray-300 whitespace-nowrap">Type</th>
+                                        <th className="px-6 py-4 font-semibold text-gray-600 dark:text-gray-300 whitespace-nowrap">Account Details</th>
+                                        <th className="px-6 py-4 font-semibold text-gray-600 dark:text-gray-300 whitespace-nowrap">Category</th>
+                                        <th className="px-6 py-4 font-semibold text-gray-600 dark:text-gray-300 whitespace-nowrap">Sub-Category</th>
+                                        <th className="px-6 py-4 font-semibold text-gray-600 dark:text-gray-300">Description</th>
+                                        <th className="px-6 py-4 font-semibold text-gray-600 dark:text-gray-300 text-right whitespace-nowrap">Amount</th>
+                                        <th className="px-6 py-4 font-semibold text-gray-600 dark:text-gray-300 text-right whitespace-nowrap">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                                    {displayedTransactions.length === 0 ? (
+                                        <tr>
+                                            <td colSpan="8" className="py-12 text-center text-gray-500 dark:text-gray-400 text-base">No matching transactions found.</td>
+                                        </tr>
+                                    ) : (
+                                        displayedTransactions.map((t) => {
+                                            const isTransfer = t.type === 'transfer';
+                                            const isTransferIn = isTransfer && t.toAccountId === (currentAccountId === 'all' ? null : currentAccountId);
+                                            const isIncome = t.type === 'income' || isTransferIn;
+                                            
+                                            const catObj = isTransfer ? null : (isIncome ? incomeCategories.find(c=>c.name===t.category) : expenseCategories.find(c=>c.name===t.category));
+                                            const catIcon = isTransfer ? 'ph-arrows-left-right' : (catObj?.icon || 'ph-tag');
+                                            const catColor = isTransfer ? '#3b82f6' : (catObj?.color || '#9ca3af');
+                                            const subObj = catObj ? normalizeSubcats(catObj.subcategories).find(s => s.name === t.subcategory) : null;
+                                            const subIcon = subObj?.icon || 'ph-tag';
+                                            
+                                            let descText = t.description;
+                                            if (isTransfer && !descText) {
+                                               if (currentAccountId === 'all') descText = 'Transfer between accounts';
+                                               else descText = (isTransferIn ? 'Received transfer' : 'Sent transfer');
+                                            }
+
+                                            const displayAccountObj = accounts.find(a => a.id === (isTransfer ? t.fromAccountId : t.accountId));
+                                            const displayAccountName = displayAccountObj?.name || 'Unknown Account';
+                                            const toAccountObj = accounts.find(a => a.id === t.toAccountId);
+                                            const toAccountName = toAccountObj?.name || 'Unknown Account';
+                                            
+                                            const accountDetails = isTransfer ? `${displayAccountName} → ${toAccountName}` : displayAccountName;
+
+                                            const typeLabel = isTransfer ? 'Transfer' : (t.type === 'income' ? 'Income' : 'Expense');
+                                            const typeStyle = isTransfer ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' : (t.type === 'income' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400');
+
+                                            return (
+                                                <tr key={t.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/30 transition-colors group text-gray-800 dark:text-gray-200">
+                                                    <td className="py-4 px-6 whitespace-nowrap text-gray-600 dark:text-gray-400">
+                                                        {new Date(t.date).toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}
+                                                    </td>
+                                                    <td className="py-4 px-6 whitespace-nowrap">
+                                                        <span className={`px-2.5 py-1 rounded text-xs font-semibold uppercase tracking-wider border border-transparent ${typeStyle}`}>{typeLabel}</span>
+                                                    </td>
+                                                    <td className="py-4 px-6 text-gray-700 dark:text-gray-300 font-medium">
+                                                        {accountDetails}
+                                                    </td>
+                                                    <td className="py-4 px-6 whitespace-nowrap font-medium">
+                                                        <div className="flex items-center gap-2">
+                                                          {renderIcon(catIcon, 'text-[18px]', { color: catColor })}
+                                                          {isTransfer ? 'Transfer' : t.category}
+                                                        </div>
+                                                    </td>
+                                                    <td className="py-4 px-6 text-gray-600 dark:text-gray-400">
+                                                        {t.subcategory ? (
+                                                            <div className="flex items-center gap-1.5">
+                                                                {renderIcon(subIcon, 'text-[16px] text-gray-400')}
+                                                                {t.subcategory}
+                                                            </div>
+                                                        ) : <span className="text-gray-400 italic">-</span>}
+                                                    </td>
+                                                    <td className="py-4 px-6 max-w-[250px] truncate" title={descText}>
+                                                        {descText || <span className="text-gray-400 italic">No description</span>}
+                                                        {t.isInvestment && <span className="ml-2 text-[10px] font-bold uppercase tracking-wider bg-purple-100 dark:bg-purple-500/20 text-purple-600 dark:text-purple-400 px-1.5 py-0.5 rounded border border-purple-200 dark:border-purple-500/30">Inv</span>}
+                                                    </td>
+                                                    <td className={`py-4 px-6 text-right font-bold whitespace-nowrap text-base ${isIncome || (isTransfer && currentAccountId === 'all') ? 'text-green-600 dark:text-green-400' : 'text-gray-900 dark:text-gray-100'}`}>
+                                                        {isIncome || (isTransfer && currentAccountId === 'all') ? '+' : '-'}{formatCurrency(t.amount)}
+                                                    </td>
+                                                    <td className="py-4 px-6 text-right whitespace-nowrap">
+                                                        <button onClick={() => handleEditTransaction(t)} className="text-gray-400 hover:text-blue-500 dark:hover:text-blue-400 p-2 transition-colors bg-gray-50 dark:bg-gray-800 rounded-md mr-1" title="Edit"><i className="ph ph-pencil-simple text-[18px]"></i></button>
+                                                        <button onClick={() => handleDelete(t.id)} className="text-gray-400 hover:text-red-500 dark:hover:text-red-400 p-2 transition-colors bg-gray-50 dark:bg-gray-800 rounded-md" title="Delete"><i className="ph ph-trash text-[18px]"></i></button>
+                                                    </td>
+                                                </tr>
+                                            )
+                                        })
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
                   </div>
                 )}
               </div>
