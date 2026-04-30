@@ -79,6 +79,7 @@
         // --- Helpers ---
         const generateId = () => Date.now().toString(36) + Math.random().toString(36).substring(2);
         
+        // Generates a local user ID to keep your data partitioned securely
         const getDeviceId = () => {
             let id = window.localStorage.getItem('budget_device_id');
             if (!id) {
@@ -151,6 +152,7 @@
           const [state, setState] = useState(initialValue);
           const [isLoaded, setIsLoaded] = useState(false);
 
+          // 1. Initial Load & Error Recovery
           useEffect(() => {
             const loadData = async () => {
                 if (!supabaseClient) {
@@ -169,6 +171,7 @@
                         .single();
 
                     if (error) {
+                        console.warn(`Supabase read error for ${key} (Expected if table is empty):`, error.message);
                         const local = window.localStorage.getItem(key);
                         if (local) setState(JSON.parse(local));
                     } else if (data && data.value) {
@@ -176,6 +179,7 @@
                         window.localStorage.setItem(key, JSON.stringify(data.value));
                     }
                 } catch (e) {
+                    console.warn(`Unexpected network error loading ${key}, falling back to local storage:`, e);
                     const local = window.localStorage.getItem(key);
                     if (local) setState(JSON.parse(local));
                 }
@@ -184,6 +188,7 @@
             loadData();
           }, [key]);
 
+          // 2. Cross-tab Synchronization (Fallback for restricted WebSockets environment)
           useEffect(() => {
               const handleStorageChange = (e) => {
                   if (e.key === key && e.newValue) {
@@ -194,17 +199,27 @@
               return () => window.removeEventListener('storage', handleStorageChange);
           }, [key]);
 
+          // 3. Write Data Safely
           const setSyncedState = (newValueOrUpdater) => {
             setState(prev => {
               const newValue = typeof newValueOrUpdater === 'function' ? newValueOrUpdater(prev) : newValueOrUpdater;
+              
+              // Always save locally instantly so the UI never lags
               window.localStorage.setItem(key, JSON.stringify(newValue));
               
               if (supabaseClient) {
+                  // Safe upsert logic that prevents crashes even if the DB is misconfigured
                   supabaseClient.from('app_data')
-                    .select('id').eq('user_id', DEVICE_ID).eq('key', key).single()
-                    .then(({data}) => {
-                        if (data && data.id) supabaseClient.from('app_data').update({ value: newValue }).eq('id', data.id).then();
-                        else supabaseClient.from('app_data').insert({ user_id: DEVICE_ID, key: key, value: newValue }).then();
+                    .select('id')
+                    .eq('user_id', DEVICE_ID)
+                    .eq('key', key)
+                    .single()
+                    .then(({data, error}) => {
+                        if (data && data.id) {
+                            supabaseClient.from('app_data').update({ value: newValue }).eq('id', data.id).then();
+                        } else {
+                            supabaseClient.from('app_data').insert({ user_id: DEVICE_ID, key: key, value: newValue }).then();
+                        }
                     });
               }
               return newValue;
@@ -255,11 +270,13 @@
           const [filterMonth, setFilterMonth] = useState((currentDate.getMonth() + 1).toString());
           const [filterYear, setFilterYear] = useState(currentDate.getFullYear().toString());
 
+          const [listFilterType, setListFilterType] = useState('all');
           const [listFilterCategory, setListFilterCategory] = useState('all');
           const [listFilterSubcategory, setListFilterSubcategory] = useState('all');
           const [listFilterDateFrom, setListFilterDateFrom] = useState('');
           const [listFilterDateTo, setListFilterDateTo] = useState('');
           const [listFilterSearch, setListFilterSearch] = useState('');
+          const [sortOrder, setSortOrder] = useState('desc');
 
           const [selectedParentCategory, setSelectedParentCategory] = useState(null);
           const [hoveredPoint, setHoveredPoint] = useState(null);
@@ -278,12 +295,14 @@
           const [newAccountType, setNewAccountType] = useState('Liquid');
           const [newAccountBalance, setNewAccountBalance] = useState('');
 
+          // New states for Icon management
           const [newCatName, setNewCatName] = useState('');
           const [newCatColor, setNewCatColor] = useState('#8b5cf6');
           const [newCatIcon, setNewCatIcon] = useState('ph-tag');
           const [newCatType, setNewCatType] = useState('expense');
           const [newSubcatIcons, setNewSubcatIcons] = useState({});
           
+          // Icon Picker Modal State
           const [iconPickerModal, setIconPickerModal] = useState({ isOpen: false, value: '', onSelect: null });
           const [customEmojiInput, setCustomEmojiInput] = useState('');
 
@@ -329,7 +348,7 @@
               if (parseInt(y, 10) !== Number(filterYear)) return false;
               if (filterMonth !== 'all' && parseInt(m, 10) !== Number(filterMonth)) return false;
               return true;
-            }).sort((a, b) => new Date(b.date) - new Date(a.date));
+            });
           }, [transactions, currentAccountId, filterMonth, filterYear, allLoaded]);
 
           const dateFilteredTransactions = useMemo(() => {
@@ -342,13 +361,8 @@
 
           const displayedTransactions = useMemo(() => {
              return dateFilteredTransactions.filter(t => {
-                if (listFilterCategory !== 'all') {
-                    if (listFilterCategory === 'Transfer') {
-                        if (t.type !== 'transfer') return false;
-                    } else {
-                        if (t.category !== listFilterCategory) return false;
-                    }
-                }
+                if (listFilterType !== 'all' && t.type !== listFilterType) return false;
+                if (listFilterCategory !== 'all' && t.category !== listFilterCategory) return false;
                 if (listFilterSubcategory !== 'all' && t.subcategory !== listFilterSubcategory) return false;
                 
                 if (listFilterSearch) {
@@ -360,14 +374,21 @@
                 }
                 
                 return true;
+             }).sort((a, b) => {
+                 const dateA = new Date(a.date).getTime();
+                 const dateB = new Date(b.date).getTime();
+                 if (dateA === dateB) {
+                     return a.id.localeCompare(b.id);
+                 }
+                 return sortOrder === 'desc' ? dateB - dateA : dateA - dateB;
              });
-          }, [dateFilteredTransactions, listFilterCategory, listFilterSubcategory, listFilterSearch]);
+          }, [dateFilteredTransactions, listFilterType, listFilterCategory, listFilterSubcategory, listFilterSearch, sortOrder]);
 
           const availableSubcategoriesFilters = useMemo(() => {
-              if (listFilterCategory === 'all' || listFilterCategory === 'Transfer' || !allLoaded) return [];
+              if (listFilterCategory === 'all' || listFilterType === 'transfer' || !allLoaded) return [];
               const catObj = [...expenseCategories, ...incomeCategories].find(c => c.name === listFilterCategory);
               return normalizeSubcats(catObj?.subcategories).map(s => s.name);
-          }, [listFilterCategory, expenseCategories, incomeCategories, allLoaded]);
+          }, [listFilterCategory, listFilterType, expenseCategories, incomeCategories, allLoaded]);
 
           const overallAccountBalance = useMemo(() => {
             if (!allLoaded) return 0;
@@ -488,9 +509,13 @@
                         onClick: () => {
                             if (hasSubs) {
                                 setSelectedParentCategory(name);
+                                const isExp = expenseCategories.some(c => c.name === name);
+                                setListFilterType(isExp ? 'expense' : 'income');
                                 setListFilterCategory(name);
                                 setListFilterSubcategory('all');
                             } else {
+                                const isExp = expenseCategories.some(c => c.name === name);
+                                setListFilterType(isExp ? 'expense' : 'income');
                                 setListFilterCategory(name);
                                 setListFilterSubcategory('all');
                             }
@@ -714,6 +739,7 @@
           };
 
           const clearListFilters = () => {
+             setListFilterType('all');
              setListFilterCategory('all');
              setListFilterSubcategory('all');
              setListFilterDateFrom('');
@@ -1157,6 +1183,61 @@
             );
           };
 
+          const renderFilterBar = () => (
+            <div className="flex flex-wrap items-center gap-2 mb-4 p-2.5 bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 text-sm">
+                <i className="ph ph-funnel text-gray-400 dark:text-gray-500 ml-1"></i>
+                
+                {/* Advanced Multi-Step Filter: Type -> Category -> Subcategory */}
+                <select value={listFilterType} onChange={(e) => { const val = e.target.value; setListFilterType(val); setListFilterCategory('all'); setListFilterSubcategory('all'); setSelectedParentCategory(null); }} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded py-1.5 px-2 text-gray-700 dark:text-gray-300 focus:outline-none focus:border-blue-500 cursor-pointer">
+                    <option value="all">All Types</option>
+                    <option value="expense">Expenses</option>
+                    <option value="income">Income</option>
+                    <option value="transfer">Transfers</option>
+                </select>
+
+                {listFilterType !== 'transfer' && (
+                    <select value={listFilterCategory} onChange={(e) => { const val = e.target.value; setListFilterCategory(val); setListFilterSubcategory('all'); if (val === 'all') { setSelectedParentCategory(null); } else { setSelectedParentCategory(val); } }} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded py-1.5 px-2 text-gray-700 dark:text-gray-300 focus:outline-none focus:border-blue-500 cursor-pointer">
+                        <option value="all">All Categories</option>
+                        {(listFilterType === 'all' || listFilterType === 'expense') && (
+                            <optgroup label="Expenses">
+                                {expenseCategories.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+                            </optgroup>
+                        )}
+                        {(listFilterType === 'all' || listFilterType === 'income') && (
+                            <optgroup label="Income">
+                                {incomeCategories.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+                            </optgroup>
+                        )}
+                    </select>
+                )}
+
+                {availableSubcategoriesFilters.length > 0 && (
+                    <select value={listFilterSubcategory} onChange={(e) => setListFilterSubcategory(e.target.value)} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded py-1.5 px-2 text-gray-700 dark:text-gray-300 focus:outline-none focus:border-blue-500 cursor-pointer">
+                        <option value="all">All Subcategories</option>
+                        {availableSubcategoriesFilters.map(sub => <option key={sub} value={sub}>{sub}</option>)}
+                    </select>
+                )}
+                
+                <div className="flex items-center gap-1 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded pl-2 pr-1 py-1 flex-1 min-w-[120px]">
+                    <i className="ph ph-magnifying-glass text-gray-400 dark:text-gray-500 text-sm"></i>
+                    <input type="text" placeholder="Search..." value={listFilterSearch} onChange={e => setListFilterSearch(e.target.value)} className="bg-transparent text-gray-700 dark:text-gray-300 focus:outline-none text-sm w-full" />
+                </div>
+
+                <div className="flex items-center gap-1 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded pl-2 pr-1 py-1">
+                    <span className="text-gray-500 text-sm">From</span>
+                    <input type="date" value={listFilterDateFrom} onChange={e => setListFilterDateFrom(e.target.value)} className="bg-transparent text-gray-700 dark:text-gray-300 focus:outline-none [color-scheme:light] dark:[color-scheme:dark] text-sm cursor-pointer" />
+                </div>
+                <div className="flex items-center gap-1 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded pl-2 pr-1 py-1">
+                    <span className="text-gray-500 text-sm">To</span>
+                    <input type="date" value={listFilterDateTo} onChange={e => setListFilterDateTo(e.target.value)} className="bg-transparent text-gray-700 dark:text-gray-300 focus:outline-none [color-scheme:light] dark:[color-scheme:dark] text-sm cursor-pointer" />
+                </div>
+
+                {(listFilterType !== 'all' || listFilterCategory !== 'all' || listFilterSubcategory !== 'all' || listFilterDateFrom || listFilterDateTo || listFilterSearch) && (
+                    <button onClick={clearListFilters} className="text-gray-500 dark:text-gray-400 hover:text-red-500 dark:hover:text-red-400 px-3 py-1.5 text-sm font-medium transition-colors">Clear</button>
+                )}
+            </div>
+          );
+
           const renderTransactionsUI = () => {
             const txsToDisplay = showAllTransactions ? displayedTransactions : displayedTransactions.slice(0, 4);
             
@@ -1171,40 +1252,7 @@
                   </button>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2 mb-4 p-2.5 bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 text-sm">
-                  <i className="ph ph-funnel text-gray-400 dark:text-gray-500 ml-1"></i>
-                  <select value={listFilterCategory} onChange={(e) => { const val = e.target.value; setListFilterCategory(val); setListFilterSubcategory('all'); if (val === 'all' || val === 'Transfer') { setSelectedParentCategory(null); } else { const isExpense = expenseCategories.some(c => c.name === val); setSelectedParentCategory(isExpense ? val : null); } }} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded py-1 px-2 text-gray-700 dark:text-gray-300 focus:outline-none focus:border-blue-500 cursor-pointer">
-                    <option value="all">All Categories</option>
-                    <option value="Transfer">Transfers</option>
-                    <optgroup label="Expenses">{expenseCategories.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}</optgroup>
-                    <optgroup label="Income">{incomeCategories.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}</optgroup>
-                  </select>
-                  
-                  {availableSubcategoriesFilters.length > 0 && (
-                    <select value={listFilterSubcategory} onChange={(e) => setListFilterSubcategory(e.target.value)} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded py-1 px-2 text-gray-700 dark:text-gray-300 focus:outline-none focus:border-blue-500 cursor-pointer">
-                      <option value="all">All Subcategories</option>
-                      {availableSubcategoriesFilters.map(sub => <option key={sub} value={sub}>{sub}</option>)}
-                    </select>
-                  )}
-                  
-                  <div className="flex items-center gap-1 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded pl-2 pr-1 py-0.5 flex-1 min-w-[120px]">
-                    <i className="ph ph-magnifying-glass text-gray-400 dark:text-gray-500 text-xs"></i>
-                    <input type="text" placeholder="Search transactions..." value={listFilterSearch} onChange={e => setListFilterSearch(e.target.value)} className="bg-transparent text-gray-700 dark:text-gray-300 focus:outline-none text-xs w-full" />
-                  </div>
-
-                  <div className="flex items-center gap-1 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded pl-2 pr-1 py-0.5">
-                    <span className="text-gray-500 text-xs">From</span>
-                    <input type="date" value={listFilterDateFrom} onChange={e => setListFilterDateFrom(e.target.value)} className="bg-transparent text-gray-700 dark:text-gray-300 focus:outline-none [color-scheme:light] dark:[color-scheme:dark] text-xs cursor-pointer" />
-                  </div>
-                  <div className="flex items-center gap-1 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded pl-2 pr-1 py-0.5">
-                    <span className="text-gray-500 text-xs">To</span>
-                    <input type="date" value={listFilterDateTo} onChange={e => setListFilterDateTo(e.target.value)} className="bg-transparent text-gray-700 dark:text-gray-300 focus:outline-none [color-scheme:light] dark:[color-scheme:dark] text-xs cursor-pointer" />
-                  </div>
-
-                  {(listFilterCategory !== 'all' || listFilterSubcategory !== 'all' || listFilterDateFrom || listFilterDateTo || listFilterSearch) && (
-                    <button onClick={clearListFilters} className="text-gray-500 dark:text-gray-400 hover:text-red-500 dark:hover:text-red-400 px-2 py-1 text-xs font-medium transition-colors">Clear</button>
-                  )}
-                </div>
+                {renderFilterBar()}
                 
                 <div className="space-y-3 overflow-y-auto pr-2 custom-scrollbar max-h-[300px]">
                   {displayedTransactions.length === 0 ? (
@@ -1525,7 +1573,7 @@
                         <div className="flex items-center justify-between mb-6 gap-4">
                           <div className="flex items-center gap-2">
                               {selectedParentCategory && (
-                                <button onClick={() => { setSelectedParentCategory(null); setListFilterCategory('all'); setListFilterSubcategory('all'); }} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors" title="Back to All Categories">
+                                <button onClick={() => { setSelectedParentCategory(null); setListFilterType('all'); setListFilterCategory('all'); setListFilterSubcategory('all'); }} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors" title="Back to All Categories">
                                   <i className="ph ph-caret-left text-[18px]"></i>
                                 </button>
                               )}
@@ -1984,40 +2032,7 @@
                         
                         {/* Filters matching the dashboard */}
                         <div className="p-4 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900">
-                            <div className="flex flex-wrap items-center gap-2 text-sm">
-                                <i className="ph ph-funnel text-gray-400 dark:text-gray-500 ml-1"></i>
-                                <select value={listFilterCategory} onChange={(e) => { const val = e.target.value; setListFilterCategory(val); setListFilterSubcategory('all'); if (val === 'all' || val === 'Transfer') { setSelectedParentCategory(null); } else { const isExpense = expenseCategories.some(c => c.name === val); setSelectedParentCategory(isExpense ? val : null); } }} className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded py-1.5 px-2 text-gray-700 dark:text-gray-300 focus:outline-none focus:border-blue-500 cursor-pointer">
-                                  <option value="all">All Categories</option>
-                                  <option value="Transfer">Transfers</option>
-                                  <optgroup label="Expenses">{expenseCategories.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}</optgroup>
-                                  <optgroup label="Income">{incomeCategories.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}</optgroup>
-                                </select>
-                                
-                                {availableSubcategoriesFilters.length > 0 && (
-                                  <select value={listFilterSubcategory} onChange={(e) => setListFilterSubcategory(e.target.value)} className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded py-1.5 px-2 text-gray-700 dark:text-gray-300 focus:outline-none focus:border-blue-500 cursor-pointer">
-                                    <option value="all">All Subcategories</option>
-                                    {availableSubcategoriesFilters.map(sub => <option key={sub} value={sub}>{sub}</option>)}
-                                  </select>
-                                )}
-                                
-                                <div className="flex items-center gap-1 border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 rounded pl-2 pr-1 py-1 flex-1 min-w-[120px]">
-                                  <i className="ph ph-magnifying-glass text-gray-400 dark:text-gray-500 text-sm"></i>
-                                  <input type="text" placeholder="Search..." value={listFilterSearch} onChange={e => setListFilterSearch(e.target.value)} className="bg-transparent text-gray-700 dark:text-gray-300 focus:outline-none text-sm w-full" />
-                                </div>
-
-                                <div className="flex items-center gap-1 border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 rounded pl-2 pr-1 py-1">
-                                  <span className="text-gray-500 text-sm">From</span>
-                                  <input type="date" value={listFilterDateFrom} onChange={e => setListFilterDateFrom(e.target.value)} className="bg-transparent text-gray-700 dark:text-gray-300 focus:outline-none [color-scheme:light] dark:[color-scheme:dark] text-sm cursor-pointer" />
-                                </div>
-                                <div className="flex items-center gap-1 border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 rounded pl-2 pr-1 py-1">
-                                  <span className="text-gray-500 text-sm">To</span>
-                                  <input type="date" value={listFilterDateTo} onChange={e => setListFilterDateTo(e.target.value)} className="bg-transparent text-gray-700 dark:text-gray-300 focus:outline-none [color-scheme:light] dark:[color-scheme:dark] text-sm cursor-pointer" />
-                                </div>
-
-                                {(listFilterCategory !== 'all' || listFilterSubcategory !== 'all' || listFilterDateFrom || listFilterDateTo || listFilterSearch) && (
-                                  <button onClick={clearListFilters} className="text-gray-500 dark:text-gray-400 hover:text-red-500 dark:hover:text-red-400 px-3 py-1.5 text-sm font-medium transition-colors">Clear</button>
-                                )}
-                            </div>
+                            {renderFilterBar()}
                         </div>
 
                         {/* Table View */}
@@ -2025,7 +2040,15 @@
                             <table className="w-full text-sm text-left border-collapse">
                                 <thead className="bg-gray-50 dark:bg-gray-800/80 sticky top-0 z-10 shadow-sm border-b border-gray-200 dark:border-gray-700">
                                     <tr>
-                                        <th className="px-6 py-4 font-semibold text-gray-600 dark:text-gray-300 whitespace-nowrap">Date</th>
+                                        <th 
+                                            onClick={() => setSortOrder(prev => prev === 'desc' ? 'asc' : 'desc')} 
+                                            className="px-6 py-4 font-semibold text-gray-600 dark:text-gray-300 whitespace-nowrap cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-700/50 transition-colors select-none group"
+                                        >
+                                            <div className="flex items-center gap-1">
+                                                Date
+                                                <i className={`ph ${sortOrder === 'desc' ? 'ph-caret-down' : 'ph-caret-up'} text-gray-400 group-hover:text-blue-500`}></i>
+                                            </div>
+                                        </th>
                                         <th className="px-6 py-4 font-semibold text-gray-600 dark:text-gray-300 whitespace-nowrap">Type</th>
                                         <th className="px-6 py-4 font-semibold text-gray-600 dark:text-gray-300 whitespace-nowrap">Account Details</th>
                                         <th className="px-6 py-4 font-semibold text-gray-600 dark:text-gray-300 whitespace-nowrap">Category</th>
